@@ -48,10 +48,12 @@ def build_model(cfg: Dict[str, Any]):
     model_cls = _REGISTRY[backbone_key]
 
     # Build kwargs from config
+    in_channels = model_cfg.get("in_channels", 1)
     kwargs = {
         "input_height": model_cfg.get("input_height", 8),
         "input_width": model_cfg.get("input_width", 4096),
         "latent_dim": model_cfg.get("latent_dim", 32),
+        "in_channels": in_channels,
     }
 
     if model_cls == CWT_LSTM_Autoencoder:
@@ -63,6 +65,7 @@ def build_model(cfg: Dict[str, Any]):
             "width": model_cfg.get("input_width", 4096),
             "latent_dim": model_cfg.get("latent_dim", 64),
             "dropout": model_cfg.get("dropout", 0.1),
+            "in_channels": in_channels,
         }
 
     return model_cls(**kwargs)

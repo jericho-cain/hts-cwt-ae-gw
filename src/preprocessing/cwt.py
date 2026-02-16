@@ -90,17 +90,21 @@ def compute_global_normalization_stats(
 
 
 def cwt_clean(
-    x: np.ndarray, 
-    fs: float, 
-    fmin: float = 20.0, 
-    fmax: float = 512.0, 
+    x: np.ndarray,
+    fs: float,
+    fmin: float = 20.0,
+    fmax: float = 512.0,
     n_scales: int = 64,
-    wavelet: str = 'morl', 
-    k_pad: float = 10.0, 
+    wavelet: str = 'morl',
+    k_pad: float = 10.0,
     k_coi: float = 6.0,
     global_mean: Optional[float] = None,
     global_std: Optional[float] = None,
-    skip_whitening: bool = False
+    skip_whitening: bool = False,
+    cwt_norm_mean: Optional[float] = None,
+    cwt_norm_std: Optional[float] = None,
+    return_before_norm: bool = False,
+    use_complex: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Legacy-style CWT implementation that preserves gravitational wave chirp features.
@@ -196,35 +200,66 @@ def cwt_clean(
         logger.error(f"CWT computation failed: {e}")
         raise
     
-    # Return raw magnitude scalogram (same as legacy)
-    scalogram = np.abs(coefficients).astype(np.float32)
-    
+    # Magnitude or Re/Im
+    if use_complex:
+        scalogram = np.stack([
+            np.real(coefficients).astype(np.float32),
+            np.imag(coefficients).astype(np.float32),
+        ], axis=0)  # (2, H, W)
+    else:
+        scalogram = np.abs(coefficients).astype(np.float32)
+
     # Resize to target height if needed (same as legacy)
-    if scalogram.shape[0] != n_scales:
-        zoom_factor = n_scales / scalogram.shape[0]
-        scalogram = zoom(scalogram, (zoom_factor, 1), order=1)
+    if scalogram.shape[-2] != n_scales:
+        zoom_factor = n_scales / scalogram.shape[-2]
+        zoom_args = (zoom_factor, 1) if scalogram.ndim == 2 else (1, zoom_factor, 1)
+        scalogram = zoom(scalogram, zoom_args, order=1)
         logger.info(f"Resized to target height: {scalogram.shape}")
-    
-    # Log transform and normalize (LEGACY APPROACH - matches EC2 working code)
-    log_scalogram = np.log10(scalogram + 1e-10)
-    normalized = (log_scalogram - np.mean(log_scalogram)) / (np.std(log_scalogram) + 1e-10)
-    normalized = normalized.astype(np.float32)
-    
-    # Time downsampling to match expected input dimensions (32768)
-    if normalized.shape[1] > 32768:
-        time_zoom_factor = 32768 / normalized.shape[1]
-        normalized = zoom(normalized, (1, time_zoom_factor), order=1)
+
+    if not use_complex:
+        log_scalogram = np.log10(scalogram + 1e-10)
+
+    # Time downsampling before final norm (so fitting uses correct dimensions)
+    tdim = log_scalogram.shape[-1] if not use_complex else scalogram.shape[-1]
+    data_pre_zoom = log_scalogram if not use_complex else scalogram
+    if tdim > 32768:
+        time_zoom_factor = 32768 / tdim
+        zoom_args = (1, time_zoom_factor) if data_pre_zoom.ndim == 2 else (1, 1, time_zoom_factor)
+        data_pre_zoom = zoom(data_pre_zoom, zoom_args, order=1)
         logger.info(f"Downsampled time dimension by factor {time_zoom_factor:.3f}")
-    
-    # Use normalized data instead of raw magnitude
+
+    if use_complex:
+        if return_before_norm:
+            normalized = data_pre_zoom.astype(np.float32)
+        elif cwt_norm_mean is not None and cwt_norm_std is not None:
+            normalized = (data_pre_zoom - cwt_norm_mean) / (cwt_norm_std + 1e-10)
+            normalized = normalized.astype(np.float32)
+        else:
+            mean_val = np.mean(data_pre_zoom)
+            std_val = np.std(data_pre_zoom) + 1e-10
+            normalized = (data_pre_zoom - mean_val) / std_val
+            normalized = normalized.astype(np.float32)
+    else:
+        if return_before_norm:
+            normalized = data_pre_zoom.astype(np.float32)
+        elif cwt_norm_mean is not None and cwt_norm_std is not None:
+            normalized = (data_pre_zoom - cwt_norm_mean) / (cwt_norm_std + 1e-10)
+            normalized = normalized.astype(np.float32)
+        else:
+            normalized = (data_pre_zoom - np.mean(data_pre_zoom)) / (np.std(data_pre_zoom) + 1e-10)
+            normalized = normalized.astype(np.float32)
+
     scalogram = normalized
-    
+
     # Calculate cone of influence
-    coi = np.zeros(scalogram.shape[1])
-    for i, scale in enumerate(scales):
-        coi_width = int(k_coi * scale)
-        coi[:coi_width] = 1
-        coi[-coi_width:] = 1
+    time_len = scalogram.shape[-1]
+    coi = np.zeros(time_len)
+    n_scales_actual = scalogram.shape[-2] if scalogram.ndim == 3 else scalogram.shape[0]
+    for i, scale in enumerate(scales[:n_scales_actual] if n_scales_actual < len(scales) else scales):
+        coi_width = min(int(k_coi * scale), time_len // 2)
+        if coi_width > 0:
+            coi[:coi_width] = 1
+            coi[-coi_width:] = 1
     
     logger.info(f"Legacy CWT completed: shape={scalogram.shape}, range={scalogram.min():.6e} to {scalogram.max():.6e}")
     logger.info(f"Normalized data: mean={scalogram.mean():.6e}, std={scalogram.std():.6e}")
@@ -244,7 +279,11 @@ def fixed_preprocess_with_cwt(
     downsample_factor: int = 4,  # EC2-style downsampling
     global_mean: Optional[float] = None,
     global_std: Optional[float] = None,
-    skip_whitening: bool = False
+    skip_whitening: bool = False,
+    cwt_norm_mean: Optional[float] = None,
+    cwt_norm_std: Optional[float] = None,
+    return_before_norm: bool = False,
+    use_complex: bool = False,
 ) -> np.ndarray:
     """
     Fixed preprocessing pipeline using EC2-equivalent approach.
@@ -294,7 +333,7 @@ def fixed_preprocess_with_cwt(
     
     # Apply legacy CWT processing with downsampled data
     scalogram, freqs, scales, coi = cwt_clean(
-        downsampled_data, 
+        downsampled_data,
         fs=downsampled_rate,
         fmin=fmin,
         fmax=fmax,
@@ -302,13 +341,19 @@ def fixed_preprocess_with_cwt(
         wavelet=wavelet,
         global_mean=global_mean,
         global_std=global_std,
-        skip_whitening=skip_whitening
+        skip_whitening=skip_whitening,
+        cwt_norm_mean=cwt_norm_mean,
+        cwt_norm_std=cwt_norm_std,
+        return_before_norm=return_before_norm,
+        use_complex=use_complex,
     )
     
     # Apply minimal downsampling if target width specified
-    if target_width is not None and scalogram.shape[1] > target_width:
-        time_zoom_factor = target_width / scalogram.shape[1]
-        scalogram = zoom(scalogram, (1, time_zoom_factor), order=1)
+    time_len = scalogram.shape[-1]
+    if target_width is not None and time_len > target_width:
+        time_zoom_factor = target_width / time_len
+        zoom_args = (1, time_zoom_factor) if scalogram.ndim == 2 else (1, 1, time_zoom_factor)
+        scalogram = zoom(scalogram, zoom_args, order=1)
         logger.info(f"Applied target downsampling: factor {time_zoom_factor:.3f}")
     
     # Check for NaN values in final output
@@ -387,7 +432,11 @@ class CWTPreprocessor:
         downsample_factor: int = 4,
         global_mean: Optional[float] = None,
         global_std: Optional[float] = None,
-        skip_whitening: bool = False
+        skip_whitening: bool = False,
+        cwt_norm_mean: Optional[float] = None,
+        cwt_norm_std: Optional[float] = None,
+        return_before_norm: bool = False,
+        use_complex: bool = False,
     ):
         """
         Initialize CWT preprocessor with legacy approach.
@@ -426,7 +475,11 @@ class CWTPreprocessor:
         self.global_mean = global_mean
         self.global_std = global_std
         self.skip_whitening = skip_whitening
-        
+        self.cwt_norm_mean = cwt_norm_mean
+        self.cwt_norm_std = cwt_norm_std
+        self.return_before_norm = return_before_norm
+        self.use_complex = use_complex
+
         logger.info(f"CWTPreprocessor initialized with legacy approach")
         logger.info(f"  Sample rate: {sample_rate} Hz")
         logger.info(f"  Target height: {target_height}")
@@ -466,5 +519,9 @@ class CWTPreprocessor:
             downsample_factor=self.downsample_factor,
             global_mean=self.global_mean,
             global_std=self.global_std,
-            skip_whitening=self.skip_whitening
+            skip_whitening=self.skip_whitening,
+            cwt_norm_mean=self.cwt_norm_mean,
+            cwt_norm_std=self.cwt_norm_std,
+            return_before_norm=self.return_before_norm,
+            use_complex=self.use_complex,
         )

@@ -2,10 +2,13 @@
 Minimal synthetic signal generator for smoke tests.
 
 Generates chirp-like signals (sum of sinusoids with envelope) for baseline
-experiments. Real waveform generation (e.g., LOSA) will be implemented later.
+experiments. Supports optional LOSA (line-of-sight acceleration) via
+generate_chirp_with_losa.
 """
 
 import numpy as np
+
+from .losa import apply_losa_constant_accel
 
 
 def generate_isolated_chirp(
@@ -65,3 +68,39 @@ def generate_isolated_chirp(
 
     signal = amplitude * env * np.sin(phase)
     return signal.astype(np.float32)
+
+
+def generate_chirp_with_losa(
+    T: int = 4096,
+    sample_rate: float = 1024.0,
+    a_los: float = 0.0,
+    v0_los: float = 0.0,
+    **kwargs,
+) -> np.ndarray:
+    """
+    Generate isolated chirp with optional LOSA applied.
+
+    Parameters
+    ----------
+    T : int
+        Number of time samples
+    sample_rate : float
+        Sampling rate in Hz
+    a_los : float
+        Constant LOS acceleration (m/s^2). If 0, returns isolated chirp only.
+    v0_los : float
+        Initial LOS velocity (m/s). If both a_los and v0_los are 0, no LOSA.
+    **kwargs
+        Passed to generate_isolated_chirp (f_start, f_end, amplitude, etc.)
+
+    Returns
+    -------
+    np.ndarray
+        Time series of shape (T,)
+    """
+    h = generate_isolated_chirp(T=T, sample_rate=sample_rate, **kwargs)
+    if a_los != 0.0 or v0_los != 0.0:
+        h = apply_losa_constant_accel(
+            h, sample_rate=sample_rate, a_los=a_los, v0_los=v0_los
+        )
+    return h

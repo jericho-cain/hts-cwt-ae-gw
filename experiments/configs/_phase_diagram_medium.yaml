@@ -1,0 +1,64 @@
+data:
+  T: 32768
+  noise_sigma: 1e-21
+  sample_rate: 1024
+  snr: 5.0
+experiment:
+  save_dir: experiments/outputs/phase_diagram/medium
+  seed: 42
+model:
+  backbone: lstm
+  dropout: 0.0
+  input_height: 8
+  input_width: 4096
+  latent_dim: 32
+  lstm_hidden: 64
+  name: cwt_autoencoder
+phase0_losa:
+  chirp_f_end:
+  - 65.0
+  - 65.0
+  chirp_f_start:
+  - 12.0
+  - 12.0
+  delta_phi_grid:
+  - 0.1
+  - 0.3
+  - 1.0
+  - 3.0
+  - 10.0
+  enabled: true
+  f_star_hz: 40.0
+  n_per_bin: 2000
+  random_sign: false
+preprocessing:
+  cwt:
+    downsample_factor: 8
+    fmax: 64.0
+    fmin: 10.0
+    norm_mode: dataset
+    sample_rate: 1024
+    target_height: 8
+    target_width: 4096
+    wavelet: morl
+synthetic:
+  T: 32768
+  chirp_f_end: 65.0
+  chirp_f_start: 12.0
+  chirp_jitter_pct: 0.05
+  chirp_sigma: 0.1
+  chirp_t_peak: 0.55
+  n_test: 2000
+  n_train: 10000
+  n_val: 2000
+  noise_sigma: 1e-21
+  sample_rate: 1024
+  signal_amplitude: 1e-20
+  tight_chirp: true
+training:
+  batch_size: 32
+  early_stopping_patience: 5
+  learning_rate: 0.001
+  loss_function: mse
+  num_epochs: 30
+  optimizer: adam

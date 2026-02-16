@@ -1,0 +1,61 @@
+# Run A: Dataset-level normalization only
+# norm_mode=dataset, keep magnitude, keep H=8
+# Answers: Does switching from per-sample to dataset norm restore LOSA sensitivity?
+
+model:
+  name: cwt_autoencoder
+  backbone: lstm
+  input_height: 8
+  input_width: 4096
+  latent_dim: 32
+  lstm_hidden: 64
+  dropout: 0.0
+
+preprocessing:
+  cwt:
+    sample_rate: 1024
+    downsample_factor: 8
+    target_height: 8
+    target_width: 4096
+    fmin: 10.0
+    fmax: 64.0
+    wavelet: morl
+    norm_mode: dataset
+
+training:
+  batch_size: 32
+  learning_rate: 0.001
+  num_epochs: 30
+  early_stopping_patience: 5
+  optimizer: adam
+  loss_function: mse
+
+synthetic:
+  n_train: 10000
+  n_val: 2000
+  n_test: 2000
+  T: 32768
+  sample_rate: 1024
+  noise_sigma: 1e-21
+  signal_amplitude: 1e-20
+  chirp_f_start: [10.0, 15.0]
+  chirp_f_end: [55.0, 70.0]
+
+data:
+  T: 32768
+  sample_rate: 1024
+  snr: 5.0
+  noise_sigma: 1e-21
+
+experiment:
+  seed: 42
+  save_dir: experiments/outputs/phase0_runA_dataset_norm
+
+phase0_losa:
+  enabled: true
+  f_star_hz: 40.0
+  delta_phi_grid: [0.1, 0.3, 1.0, 3.0, 10.0]
+  random_sign: false
+  n_per_bin: 2000
+  chirp_f_start: [10.0, 15.0]
+  chirp_f_end: [55.0, 70.0]

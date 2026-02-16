@@ -75,22 +75,24 @@ class CWT_LSTM_Autoencoder(nn.Module):
     """
     
     def __init__(
-        self, 
-        input_height: int, 
-        input_width: int, 
-        latent_dim: int = 32, 
+        self,
+        input_height: int,
+        input_width: int,
+        latent_dim: int = 32,
         lstm_hidden: int = 64,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        in_channels: int = 1,
     ) -> None:
         super().__init__()
         
         self.input_height = input_height
         self.input_width = input_width
         self.latent_dim = latent_dim
+        self.in_channels = in_channels
         
         # Encoder: 2D CNN to extract spatial features - memory efficient
         self.spatial_encoder = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels, 16, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d((8, 8)),  # Immediate downsampling to avoid large intermediates
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
@@ -117,7 +119,7 @@ class CWT_LSTM_Autoencoder(nn.Module):
             nn.Unflatten(1, (16, 4, 4)),  # Reshape to tiny fixed spatial dimensions
             nn.ConvTranspose2d(16, 8, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(8, 1, kernel_size=3, stride=2, padding=1),
+            nn.ConvTranspose2d(8, in_channels, kernel_size=3, stride=2, padding=1),
             nn.AdaptiveAvgPool2d((input_height, input_width)),  # Upsample to target dimensions
             nn.Tanh()  # Output in [-1, 1] range
         )
@@ -267,17 +269,20 @@ class SimpleCWTAutoencoder(nn.Module):
     """
     
     def __init__(
-        self, 
-        height: int, 
-        width: int, 
+        self,
+        height: int,
+        width: int,
         latent_dim: int = 64,
-        dropout: float = 0.1
+        dropout: float = 0.1,
+        in_channels: int = 1,
     ) -> None:
         super().__init__()
         
+        self.in_channels = in_channels
+        
         # Encoder
         self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),  # Downsample
+            nn.Conv2d(in_channels, 32, kernel_size=3, stride=2, padding=1),  # Downsample
             nn.ReLU(),
             nn.Dropout2d(dropout),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
@@ -298,7 +303,7 @@ class SimpleCWTAutoencoder(nn.Module):
             nn.Unflatten(1, (64, 8, 8)),
             nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(32, in_channels, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.Tanh()
         )
         

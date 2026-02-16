@@ -1,0 +1,58 @@
+# Phase 0 LOSA evaluation config (delta_phi-based)
+# 32 s window so LOSA time shift accumulates. Grid targets cumulative phase distortion.
+# Training: isolated only. Evaluation: isolated + LOSA bins.
+
+model:
+  name: cwt_autoencoder
+  backbone: lstm
+  input_height: 8
+  input_width: 4096
+  latent_dim: 32
+  lstm_hidden: 64
+  dropout: 0.0
+
+preprocessing:
+  cwt:
+    sample_rate: 1024
+    downsample_factor: 8
+    target_height: 8
+    target_width: 4096
+    fmin: 10.0
+    fmax: 64.0
+    wavelet: morl
+
+training:
+  batch_size: 4
+  learning_rate: 0.001
+  num_epochs: 1
+  optimizer: adam
+  loss_function: mse
+
+synthetic:
+  n_samples: 16
+  T: 32768
+  sample_rate: 1024
+  noise_sigma: 1e-21
+  signal_amplitude: 1e-20
+  chirp_f_start: [10.0, 15.0]
+  chirp_f_end: [55.0, 70.0]
+
+# Data params for Phase 0 eval: 32 s at 1024 Hz
+data:
+  T: 32768
+  sample_rate: 1024
+  snr: 5.0
+  noise_sigma: 1e-21
+
+experiment:
+  seed: 42
+  save_dir: experiments/outputs/phase0
+
+phase0_losa:
+  enabled: true
+  f_star_hz: 40.0
+  delta_phi_grid: [0.1, 0.3, 1.0, 3.0]
+  random_sign: false
+  n_per_bin: 200
+  chirp_f_start: [10.0, 15.0]
+  chirp_f_end: [55.0, 70.0]
