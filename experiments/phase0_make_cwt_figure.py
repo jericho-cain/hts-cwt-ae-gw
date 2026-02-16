@@ -68,9 +68,9 @@ def _plot_cwt_panel(ax, time_s, freqs, S, cmap, vmin, vmax, ridge=None, fmin=Non
     ax.set_yscale("log")
     if fmin is not None and fmax is not None:
         ax.set_ylim(fmin, fmax)
-    # Y-ticks: adapt to band (e.g. [10,20,30,40,60] for 64 Hz, add 80,100,120 for 128 Hz)
-    base_ticks = [10, 20, 30, 40, 60]
-    yticks = [z for z in base_ticks + [80, 100, 120] if fmin <= z <= fmax] if fmax else base_ticks
+    # Y-ticks: [10,20,30,40,60,80,100] — drop 120 to avoid overlap at fmax=128
+    base_ticks = [10, 20, 30, 40, 60, 80, 100]
+    yticks = [z for z in base_ticks if fmin <= z <= fmax] if fmax else base_ticks
     ax.set_yticks(yticks)
     ax.get_yaxis().set_major_formatter(mticker.ScalarFormatter())
     if ridge is not None:
@@ -146,6 +146,24 @@ def main():
         action="store_true",
         help="Print frequency calibration info (wavelet fc, freqs min/max)",
     )
+    parser.add_argument(
+        "--delta_s_mode",
+        type=str,
+        choices=["log_ratio", "frac_dp"],
+        default="frac_dp",
+        help="ΔS panel: frac_dp (fractional ΔP, less banding) or log_ratio (S_losa-S_iso)",
+    )
+    parser.add_argument(
+        "--fmax",
+        type=float,
+        default=None,
+        help="Override fmax for figure (e.g. 68 to clip near chirp end). Default: 80 (high-res) or config (low-res).",
+    )
+    parser.add_argument(
+        "--referee",
+        action="store_true",
+        help="Referee-proof layout: ridge overlay on (c), unsmoothed P for ΔP/P, eps=1e-3*P_peak, Δf(t) on (d).",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -166,15 +184,18 @@ def main():
     cfg_fig = copy.deepcopy(cfg)
     high_res = not args.low_res
     if high_res:
+        fmax_fig = args.fmax if args.fmax is not None else 60.0
         cfg_fig.setdefault("preprocessing", {}).setdefault("cwt", {}).update({
-            "fmax": 128.0,
+            "fmax": fmax_fig,
             "fmin": 10.0,
             "target_height": 48,
         })
-        logger.info("Using high-res figure: fmax=128 Hz, target_height=48")
+        logger.info("Using high-res figure: fmax=%s Hz, target_height=48", fmax_fig)
         if args.wavelet is None:
             cfg_fig.setdefault("preprocessing", {}).setdefault("cwt", {})["wavelet"] = "cmor6-1"
             logger.info("Figure wavelet: cmor6-1 (less ringy for paper)")
+    elif args.fmax is not None:
+        cfg_fig.setdefault("preprocessing", {}).setdefault("cwt", {})["fmax"] = args.fmax
     if args.wavelet is not None:
         cfg_fig.setdefault("preprocessing", {}).setdefault("cwt", {})["wavelet"] = args.wavelet
         logger.info(f"Figure wavelet override: {args.wavelet}")
@@ -262,26 +283,46 @@ def main():
     S_iso_pow = 2.0 * S_iso
     S_losa_pow = 2.0 * S_losa
 
-    # Light frequency smoothing (display only) to knock down ring edges
-    from scipy.ndimage import gaussian_filter
-    sigma_disp = (0.7, 0.3)  # (freq bins, time bins)
-    S_iso_pow = gaussian_filter(S_iso_pow, sigma=sigma_disp, mode="nearest")
-    S_losa_pow = gaussian_filter(S_losa_pow, sigma=sigma_disp, mode="nearest")
-
     # Mask cone-of-influence (keep full time axis; COI shown as light gray)
     coi = get_cwt_coi(freqs, fs_down, n_time, wavelet=wavelet)
     coi_mask = coi.astype(bool)
-    S_iso_plot = S_iso_pow.copy()
-    S_losa_plot = S_losa_pow.copy()
+
+    # Top panels (a)(b): smoothed scalograms
+    from scipy.ndimage import gaussian_filter
+    sigma_disp = (0.7, 0.3)  # (freq bins, time bins)
+    S_iso_pow_smooth = gaussian_filter(S_iso_pow, sigma=sigma_disp, mode="nearest")
+    S_losa_pow_smooth = gaussian_filter(S_losa_pow, sigma=sigma_disp, mode="nearest")
+    S_iso_plot = S_iso_pow_smooth.copy()
+    S_losa_plot = S_losa_pow_smooth.copy()
     S_iso_plot[:, coi_mask] = np.nan
     S_losa_plot[:, coi_mask] = np.nan
 
-    # Main difference: ΔS = S_losa − S_iso (log-power space)
-    dS = S_losa_plot - S_iso_plot
-    dS = np.nan_to_num(dS, nan=0.0, posinf=0.0, neginf=0.0)
-
-    # Light time smoothing on ΔS for visibility
-    dS_smooth = gaussian_filter(dS, sigma=(0.0, 1.0), mode="nearest")
+    # Panel (c): ΔP/P — referee mode uses unsmoothed P, eps=α*P_peak, light display smoothing
+    if args.delta_s_mode == "log_ratio":
+        dS = S_losa_plot - S_iso_plot  # log10(P_losa/P_iso)
+        dS_smooth = gaussian_filter(np.nan_to_num(dS, nan=0), sigma=(0.5, 0.5), mode="nearest")
+    else:
+        if args.referee:
+            # Unsmooth P (before top-panel smoothing) for cleaner derivative-like structure
+            S_iso_raw = 2.0 * S_iso.copy()
+            S_losa_raw = 2.0 * S_losa.copy()
+            S_iso_raw[:, coi_mask] = np.nan
+            S_losa_raw[:, coi_mask] = np.nan
+            P_iso = 10.0 ** S_iso_raw
+            P_losa = 10.0 ** S_losa_raw
+            eps = 1e-3 * np.nanmax(P_iso)  # spec: α=10⁻³
+        else:
+            P_iso = 10.0 ** S_iso_plot
+            P_losa = 10.0 ** S_losa_plot
+            eps = np.nanmax(P_iso) * 1e-12
+        dS = (P_losa - P_iso) / (P_iso + eps)
+        dS = np.nan_to_num(dS, nan=0.0, posinf=0.0, neginf=0.0)
+        if args.referee:
+            dS_smooth = gaussian_filter(dS, sigma=(0.5, 0.5), mode="nearest")
+        else:
+            from scipy.ndimage import median_filter
+            dS_smooth = median_filter(dS, size=(9, 9), mode="nearest")
+            dS_smooth = gaussian_filter(dS_smooth, sigma=(1.0, 0.8), mode="nearest")
 
     # Relative intensity for top panels: S_rel = S - max(S), peak at 0
     valid = np.isfinite(S_iso_plot) & np.isfinite(S_losa_plot)
@@ -295,16 +336,26 @@ def main():
     # Chirp end frequency (for --show_chirp_end sanity check)
     chirp_end_hz = f1 if args.show_chirp_end else None
 
-    # Mask ΔS: only show where signal energy exceeds threshold (avoids "barcode" in quiet regions)
-    thresh_signal = -3.0  # log-power rel. to peak; ~15 dB down (2x log-mag)
+    # Mask ΔS: only show where signal energy exceeds threshold (avoids banding in quiet regions)
+    thresh_signal = -3.0 if args.referee else -2.0  # referee: ~15 dB down
     mask_signal = (S_iso_rel > thresh_signal) | (S_losa_rel > thresh_signal)
     dS_smooth[~mask_signal] = np.nan
 
     dlim = np.percentile(np.abs(dS_smooth[np.isfinite(dS_smooth)]), 99)
     dlim = max(dlim, 1e-6)
+    dlim = dlim * 1.4  # Widen color range so bands are less saturated, less visually dominant
 
-    # True LOSA time shift Δt(t) = 0.5 * (a_los/c) * t^2 (for panel d; replaces noisy ridge)
+    delta_s_title = r"$\Delta S$ (log-power)" if args.delta_s_mode == "log_ratio" else r"$\Delta P/P$ (fractional)"
+    delta_s_cbar = r"$\Delta S$" if args.delta_s_mode == "log_ratio" else r"$\Delta P/P$"
+
+    # True LOSA time shift Δt(t) = 0.5 * (a_los/c) * t^2 (for panel d)
     dt_true = 0.5 * (a_los / C_LIGHT) * (time_s ** 2)
+    duration = float(time_s[-1]) if len(time_s) > 0 else 1.0
+    # Isolated chirp ridge f(t) = f0 + (f1-f0)*t/T (linear chirp)
+    ridge_iso = f0 + (f1 - f0) * (time_s / duration)
+    # Δf(t) ≈ (df/dt)*Δt for linear chirp: df/dt = (f1-f0)/T
+    dfdt = (f1 - f0) / duration
+    df_true = dfdt * dt_true
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -362,8 +413,8 @@ def main():
     im3 = _plot_cwt_panel(ax3, time_s, freqs, dS_smooth, cmap_cw, -dlim, dlim, fmin=fmin, fmax=fmax)
     ax3.set_xlabel("Time [s]")
     ax3.set_ylabel("Frequency [Hz]")
-    ax3.set_title(r"$\Delta S = S_{\mathrm{LOSA}} - S_{\mathrm{iso}}$")
-    plt.colorbar(im3, ax=ax3, label=r"$\Delta S$")
+    ax3.set_title(delta_s_title)
+    plt.colorbar(im3, ax=ax3, label=delta_s_cbar)
     plt.tight_layout()
     plt.savefig(outdir / "phase0_cwt_diff.png", dpi=300, bbox_inches="tight")
     plt.close()
@@ -423,31 +474,41 @@ def main():
     im1 = _plot_cwt_panel(ax1, time_s, freqs, S_iso_rel, cmap_vir, vmin, vmax, ridge=None, fmin=fmin, fmax=fmax, chirp_end_hz=chirp_end_hz)
     ax1.set_title("Isolated")
     ax1.set_ylabel("Frequency [Hz]")
-    ax1.text(0.01, 0.98, "(a)", transform=ax1.transAxes, va="top", ha="left", fontweight="bold")
+    _label_bbox = dict(boxstyle="round,pad=0.15", facecolor="white", alpha=0.9, edgecolor="none")
+    ax1.text(0.01, 0.98, "(a)", transform=ax1.transAxes, va="top", ha="left", fontweight="bold", bbox=_label_bbox)
 
     im2 = _plot_cwt_panel(ax2, time_s, freqs, S_losa_rel, cmap_vir, vmin, vmax, ridge=None, fmin=fmin, fmax=fmax, chirp_end_hz=chirp_end_hz)
     ax2.set_title(r"LOSA ($\Delta\phi=" + f"{args.delta_phi}" + r"$ rad)")
     ax2.set_ylabel("Frequency [Hz]")
-    ax2.text(0.01, 0.98, "(b)", transform=ax2.transAxes, va="top", ha="left", fontweight="bold")
+    ax2.text(0.01, 0.98, "(b)", transform=ax2.transAxes, va="top", ha="left", fontweight="bold", bbox=_label_bbox)
     plt.setp(ax2.get_yticklabels(), visible=True)
 
     im3 = _plot_cwt_panel(ax3, time_s, freqs, dS_smooth, cmap_cw, -dlim, dlim, fmin=fmin, fmax=fmax)
-    ax3.set_title(r"$\Delta S = S_{\mathrm{LOSA}} - S_{\mathrm{iso}}$ (smoothed)")
+    ax3.set_title(delta_s_title)
     ax3.set_xlabel("")
     ax3.set_ylabel("Frequency [Hz]")
     ax3.text(0.01, 0.98, "(c)", transform=ax3.transAxes, va="top", ha="left", fontweight="bold")
+    if args.referee:
+        ridge_plot = np.clip(ridge_iso, fmin, fmax)
+        ax3.plot(time_s, ridge_plot, "k-", lw=0.8, alpha=0.9, label=r"analytic $f(t)$")
+        ax3.legend(loc="lower right", fontsize=8, framealpha=0.95, facecolor="white")
 
-    # Panel (d): true LOSA time shift Δt(t) = 0.5*(a/c)*t² (from generator model)
+    # Panel (d): Δt(t) and optionally Δf(t) = (df/dt)Δt
     ax4.plot(time_s, dt_true * 1e6, "k-", lw=1)
     ax4.axhline(0, color="gray", lw=0.8, linestyle="--")
     ax4.set_ylabel(r"$\Delta t$ [µs]")
     ax4.set_xlabel("Time [s]")
     ax4.text(0.01, 0.98, "(d)", transform=ax4.transAxes, va="top", ha="left", fontweight="bold")
+    if args.referee:
+        ax4_right = ax4.twinx()
+        ax4_right.plot(time_s, df_true, color="0.5", ls="--", lw=1)
+        ax4_right.set_ylabel(r"$\Delta f$ [Hz]", color="0.5")
+        ax4_right.tick_params(axis="y", labelcolor="0.5")
 
     cbar1 = fig.colorbar(im1, ax=[ax1, ax2], shrink=0.9, pad=0.02)
     cbar1.set_label(r"$\log_{10}|W|^2$ (rel. peak)")
     cbar3 = fig.colorbar(im3, ax=ax3, shrink=0.9, pad=0.02)
-    cbar3.set_label(r"$\Delta S$")
+    cbar3.set_label(delta_s_cbar)
 
     fig.savefig(outdir / "phase0_cwt_losa_triptych.png", dpi=300, bbox_inches="tight")
     plt.close()
@@ -458,18 +519,23 @@ def main():
         im_a = _plot_cwt_panel(axes[0, 0], time_s, freqs, S_iso_rel, cmap_vir, vmin, vmax, ridge=None, fmin=fmin, fmax=fmax, chirp_end_hz=chirp_end_hz)
         axes[0, 0].set_title("Isolated")
         axes[0, 0].set_ylabel("Frequency [Hz]")
-        axes[0, 0].text(0.01, 0.98, "(a)", transform=axes[0, 0].transAxes, va="top", ha="left", fontweight="bold")
+        _lb = dict(boxstyle="round,pad=0.15", facecolor="white", alpha=0.9, edgecolor="none")
+        axes[0, 0].text(0.01, 0.98, "(a)", transform=axes[0, 0].transAxes, va="top", ha="left", fontweight="bold", bbox=_lb)
 
         im_b = _plot_cwt_panel(axes[0, 1], time_s, freqs, S_losa_rel, cmap_vir, vmin, vmax, ridge=None, fmin=fmin, fmax=fmax, chirp_end_hz=chirp_end_hz)
         axes[0, 1].set_title(r"LOSA ($\Delta\phi=" + f"{args.delta_phi}" + r"$ rad)")
         axes[0, 1].set_ylabel("Frequency [Hz]")
-        axes[0, 1].text(0.01, 0.98, "(b)", transform=axes[0, 1].transAxes, va="top", ha="left", fontweight="bold")
+        axes[0, 1].text(0.01, 0.98, "(b)", transform=axes[0, 1].transAxes, va="top", ha="left", fontweight="bold", bbox=_lb)
 
         im_c = _plot_cwt_panel(axes[1, 0], time_s, freqs, dS_smooth, cmap_cw, -dlim, dlim, fmin=fmin, fmax=fmax)
-        axes[1, 0].set_title(r"$\Delta S$ (log-power)")
+        axes[1, 0].set_title(delta_s_title)
         axes[1, 0].set_xlabel("Time [s]")
         axes[1, 0].set_ylabel("Frequency [Hz]")
         axes[1, 0].text(0.01, 0.98, "(c)", transform=axes[1, 0].transAxes, va="top", ha="left", fontweight="bold")
+        if args.referee:
+            ridge_plot = np.clip(ridge_iso, fmin, fmax)
+            axes[1, 0].plot(time_s, ridge_plot, "k-", lw=0.8, alpha=0.9, label=r"analytic $f(t)$")
+            axes[1, 0].legend(loc="lower right", fontsize=8, framealpha=0.95, facecolor="white")
 
         rlim = float(np.nanpercentile(np.abs(resid_plot[np.isfinite(resid_plot)]), 99)) if np.any(np.isfinite(resid_plot)) else 1e-6
         rlim = max(rlim, 1e-6)
@@ -492,7 +558,7 @@ def main():
         axes[1, 1].text(0.01, 0.98, "(d)", transform=axes[1, 1].transAxes, va="top", ha="left", fontweight="bold")
 
         fig.colorbar(im_a, ax=[axes[0, 0], axes[0, 1]], shrink=0.9, pad=0.02, label=r"$\log_{10}|W|^2$ (rel. peak)")
-        fig.colorbar(im_c, ax=axes[1, 0], shrink=0.9, pad=0.02, label=r"$\Delta S$")
+        fig.colorbar(im_c, ax=axes[1, 0], shrink=0.9, pad=0.02, label=delta_s_cbar)
         fig.colorbar(im_d, ax=axes[1, 1], shrink=0.9, pad=0.02, label="Residual")
 
         plt.savefig(outdir / "phase0_cwt_quad.png", dpi=300, bbox_inches="tight")
@@ -506,26 +572,36 @@ def main():
         ax2 = fig.add_subplot(gs[0, 1], sharex=ax1, sharey=ax1)
         ax3 = fig.add_subplot(gs[1, :], sharex=ax1)
         ax4 = fig.add_subplot(gs[2, :], sharex=ax1)
+        _lb = dict(boxstyle="round,pad=0.15", facecolor="white", alpha=0.9, edgecolor="none")
         im1 = _plot_cwt_panel(ax1, time_s, freqs, S_iso_rel, cmap_vir, vmin, vmax, ridge=None, fmin=fmin, fmax=fmax, chirp_end_hz=chirp_end_hz)
         ax1.set_title("Isolated")
         ax1.set_ylabel("Frequency [Hz]")
-        ax1.text(0.01, 0.98, "(a)", transform=ax1.transAxes, va="top", ha="left", fontweight="bold")
+        ax1.text(0.01, 0.98, "(a)", transform=ax1.transAxes, va="top", ha="left", fontweight="bold", bbox=_lb)
         im2 = _plot_cwt_panel(ax2, time_s, freqs, S_losa_rel, cmap_vir, vmin, vmax, ridge=None, fmin=fmin, fmax=fmax, chirp_end_hz=chirp_end_hz)
         ax2.set_title(r"LOSA ($\Delta\phi=" + f"{args.delta_phi}" + r"$ rad)")
         ax2.set_ylabel("Frequency [Hz]")
-        ax2.text(0.01, 0.98, "(b)", transform=ax2.transAxes, va="top", ha="left", fontweight="bold")
+        ax2.text(0.01, 0.98, "(b)", transform=ax2.transAxes, va="top", ha="left", fontweight="bold", bbox=_lb)
         im3 = _plot_cwt_panel(ax3, time_s, freqs, dS_smooth, cmap_cw, -dlim, dlim, fmin=fmin, fmax=fmax)
-        ax3.set_title(r"$\Delta S = S_{\mathrm{LOSA}} - S_{\mathrm{iso}}$ (smoothed)")
+        ax3.set_title(delta_s_title)
         ax3.set_xlabel("")
         ax3.set_ylabel("Frequency [Hz]")
         ax3.text(0.01, 0.98, "(c)", transform=ax3.transAxes, va="top", ha="left", fontweight="bold")
+        if args.referee:
+            ridge_plot = np.clip(ridge_iso, fmin, fmax)
+            ax3.plot(time_s, ridge_plot, "k-", lw=0.8, alpha=0.9, label=r"analytic $f(t)$")
+            ax3.legend(loc="lower right", fontsize=8, framealpha=0.95, facecolor="white")
         ax4.plot(time_s, dt_true * 1e6, "k-", lw=1)
         ax4.axhline(0, color="gray", lw=0.8, linestyle="--")
         ax4.set_ylabel(r"$\Delta t$ [µs]")
         ax4.set_xlabel("Time [s]")
         ax4.text(0.01, 0.98, "(d)", transform=ax4.transAxes, va="top", ha="left", fontweight="bold")
+        if args.referee:
+            ax4_right = ax4.twinx()
+            ax4_right.plot(time_s, df_true, color="0.5", ls="--", lw=1)
+            ax4_right.set_ylabel(r"$\Delta f$ [Hz]", color="0.5")
+            ax4_right.tick_params(axis="y", labelcolor="0.5")
         fig.colorbar(im1, ax=[ax1, ax2], shrink=0.9, pad=0.02, label=r"$\log_{10}|W|^2$ (rel. peak)")
-        fig.colorbar(im3, ax=ax3, shrink=0.9, pad=0.02, label=r"$\Delta S$")
+        fig.colorbar(im3, ax=ax3, shrink=0.9, pad=0.02, label=delta_s_cbar)
         plt.savefig(outdir / "phase0_cwt_quad.png", dpi=300, bbox_inches="tight")
         plt.close()
 
