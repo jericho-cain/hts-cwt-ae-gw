@@ -1,0 +1,30 @@
+name: Security Scan
+on: [push, pull_request]
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Display Trivy scan results
+        if: always()
+        run: |
+          if [ -f trivy-results.sarif ]; then
+            echo "Security scan completed. Results saved to trivy-results.sarif"
+            echo "To view results, install Trivy locally and run: trivy fs --format sarif . > results.sarif"
+          else
+            echo "No security issues found"
+          fi

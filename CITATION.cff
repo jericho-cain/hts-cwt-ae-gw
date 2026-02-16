@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "HTS-CWT-AE-GW"
+    given-names: ""
+title: "HTS-CWT-AE-GW: Synthetic CWT Autoencoder for Gravitational Wave Anomaly Detection"
+version: 0.1.0
+date-released: 2025-02-15
+url: "https://github.com/gravitational-wave-detection/hts-cwt-ae-gw"
+license: MIT
+keywords:
+  - gravitational-waves
+  - machine-learning
+  - anomaly-detection
+  - continuous-wavelet-transform
+  - autoencoder
+  - synthetic-data
