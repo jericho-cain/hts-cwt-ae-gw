@@ -23,6 +23,54 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def get_cwt_freq_grid(fmin: float, fmax: float, n_scales: int) -> np.ndarray:
+    """
+    Return frequency grid used by cwt_clean (log-spaced). Use for plotting y-axis.
+    """
+    return np.logspace(np.log10(fmin), np.log10(fmax), n_scales)
+
+
+def get_cwt_display_freqs(
+    wavelet: str,
+    fmin: float,
+    fmax: float,
+    n_scales: int,
+    fs: float,
+) -> np.ndarray:
+    """
+    Return exact frequencies from pywt.cwt (matches cwt_clean output).
+    Use for figure y-axis to eliminate any scale↔freq reconstruction error.
+    """
+    freqs = np.logspace(np.log10(fmin), np.log10(fmax), n_scales)
+    fc = pywt.central_frequency(pywt.ContinuousWavelet(wavelet))
+    scales = fc * fs / freqs
+    _, frequencies = pywt.cwt(np.zeros(2), scales, wavelet, sampling_period=1 / fs)
+    return np.asarray(frequencies, dtype=np.float64)
+
+
+def get_cwt_coi(
+    freqs: np.ndarray,
+    fs: float,
+    time_len: int,
+    wavelet: str = "morl",
+    k_coi: float = 6.0,
+) -> np.ndarray:
+    """
+    Return cone-of-influence mask matching cwt_clean.
+    1 = inside COI (unreliable), 0 = outside.
+    Uses same scale-to-frequency mapping as cwt_clean (central_frequency).
+    """
+    fc = pywt.central_frequency(pywt.ContinuousWavelet(wavelet))
+    scales = fc * fs / freqs
+    coi = np.zeros(time_len, dtype=np.float64)
+    for scale in scales:
+        coi_width = min(int(k_coi * scale), time_len // 2)
+        if coi_width > 0:
+            coi[:coi_width] = 1
+            coi[-coi_width:] = 1
+    return coi
+
+
 def compute_global_normalization_stats(
     training_noise_files: List[Path],
     sample_rate: int = 4096,
@@ -185,11 +233,13 @@ def cwt_clean(
         whitened = filtered
     
     # Generate scales for CWT - USE CONFIGURED FREQUENCY RANGE
-    # Use the actual fmin and fmax parameters instead of hardcoded values
+    # Scale-to-frequency: f ≈ fc / (scale * dt) => scale = fc * fs / f
+    # Must use wavelet's central frequency; scales = fs/freqs assumes fc=1 (wrong for morl, etc.)
     freqs = np.logspace(np.log10(fmin), np.log10(fmax), n_scales)
-    scales = fs / freqs
-    logger.debug(f"CWT scales: {len(scales)} scales covering {fmin}-{fmax} Hz")
-    
+    fc = pywt.central_frequency(pywt.ContinuousWavelet(wavelet))
+    scales = fc * fs / freqs
+    logger.debug(f"CWT scales: {len(scales)} scales covering {fmin}-{fmax} Hz (fc={fc:.4f})")
+
     # Compute CWT - same as legacy
     try:
         coefficients, frequencies = pywt.cwt(
@@ -263,8 +313,9 @@ def cwt_clean(
     
     logger.info(f"Legacy CWT completed: shape={scalogram.shape}, range={scalogram.min():.6e} to {scalogram.max():.6e}")
     logger.info(f"Normalized data: mean={scalogram.mean():.6e}, std={scalogram.std():.6e}")
-    
-    return scalogram, freqs, scales, coi
+
+    # Use pywt's returned frequencies (authoritative for axis calibration)
+    return scalogram, frequencies, scales, coi
 
 
 def fixed_preprocess_with_cwt(

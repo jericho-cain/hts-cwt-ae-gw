@@ -187,6 +187,23 @@ Each run writes to `experiments/outputs/<save_dir>/`:
 
 **Phase diagram:** `experiments/outputs/phase_diagram/` — per-level subdirs, `phase_diagram_auroc_vs_spread.png`, `phase_diagram_results.json`
 
+**Model checkpoints:** Saved when `experiment.save_model: true` (default). E.g. `phase0_tight_chirp/model.pt` for CWT figure residual panel. Re-run tight chirp to create if missing.
+
+---
+
+## CWT Figure (Paper-Ready)
+
+Generate paper-ready CWT spectrogram figure (iso vs LOSA):
+
+```bash
+python -m experiments.phase0_make_cwt_figure --delta_phi 3.0 --outdir figures --config experiments/configs/ground_phase0_tight_chirp.yaml
+```
+
+Optional: add `--model_path experiments/outputs/phase0_tight_chirp/model.pt` for AE residual panel.
+Add `--low_res` to use config resolution (8 bins, 64 Hz) instead of default high-res (48 bins, 128 Hz).
+
+**Outputs:** `figures/phase0_cwt_iso.png`, `phase0_cwt_losa.png`, `phase0_cwt_diff.png`, `phase0_cwt_quad.png` (+ `phase0_cwt_resid.png` if model provided)
+
 ---
 
 ## Planned Experiments

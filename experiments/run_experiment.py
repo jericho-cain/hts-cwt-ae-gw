@@ -512,6 +512,9 @@ def main():
             "test_recon_std": float(np.std(baseline_errs["test"])),
         }
         save_json(baseline, save_dir / "baseline_fit.json")
+        if cfg.get("experiment", {}).get("save_model", True):
+            torch.save({"model_state_dict": model.state_dict(), "config": cfg}, save_dir / "model.pt")
+            logger.info(f"Saved model to {save_dir / 'model.pt'}")
         cwt_train_for_latent = cwt_train
     else:
         logger.info("=" * 60)
