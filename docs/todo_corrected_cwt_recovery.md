@@ -28,10 +28,10 @@ python -m experiments.run_phase_diagram --output-base experiments/outputs_correc
 
 ---
 
-### 3. [ ] Increase CWT frequency resolution (H=16 or 32)
+### 3. [x] Increase CWT frequency resolution (H=16 or 32)
 **Hypothesis:** 8 scales over 10–64 Hz is very coarse; LOSA time-warp creates subtle ridge shifts that get averaged away.
 
-**Action:** Use `ground_phase0_runB_H32.yaml`-style config: `target_height: 32`, `input_height: 32`. Requires model arch supports H=32.
+**Action:** Use `ground_phase0_tight_chirp_H32.yaml`. Run: `--config experiments/configs/ground_phase0_tight_chirp_H32.yaml --output-suffix _H32`. **Result:** very_tight recon AUROC recovered to 0.71/0.64 (vs 0.50/0.41 at H=8).
 
 **Effort:** Medium. Config + model compatibility check. Run phase diagram with H=32 base config.
 
@@ -92,6 +92,60 @@ python -m experiments.run_phase_diagram --output-base experiments/outputs_correc
 **Action:** Sweep fmin, fmax in config; compare very_tight AUROC.
 
 **Effort:** Low. Config sweep.
+
+---
+
+## Validation / sanity checks (after H32 experiment)
+
+### A. [x] Recon error scaling (mean ~1.0 vs ~0.5)
+**Red flag:** H=8 mean recon error ~1.0, H=32 ~0.5. Suggests input scaling changed, not just "better representation."
+
+**Results (check_input_variance_H8_vs_H32.py):**
+- Same normalization ✓: both post-norm mean≈0, std=1, var=1
+- ||x||^2 ratio (H32/H8) = 4.0 (exactly n_elements ratio)
+- If err scaled purely as 1/||x||^2: expected err_H32 ≈ 0.25 when err_H8=1.0
+- Observed: err_H32 ~0.5 (not 0.25)
+- **Conclusion:** Denom scaling does NOT fully explain the shift. A pure scaling story would give err≈0.25; we get 0.5, so the AE at H=32 is doing relatively better per-element reconstruction (MSE doesn't scale 1:1 with n_elements) — the improvement is partly genuine representation quality, not just arithmetic.
+
+**Airtight check (check_recon_metrics_H8_vs_H32.py):** Now computes MSE_elem, SSE, r separately. Phase0 JSON stores mean_mse_elem, mean_sse, n_elem. Re-run with properly trained H=32 checkpoint (phase diagram didn't save model.pt; train one with full config) for fair MSE_elem comparison.
+
+---
+
+### B. [ ] Δφ ordering / monotonicity
+**Red flag:** AUROC(Δφ=1) > AUROC(Δφ=3) in some runs. Physics suggests larger deformation → easier to detect → AUROC(3) ≥ AUROC(1).
+
+**Common causes when reversed:**
+- Saturation/clipping (percentile clip, log eps floor, masking)
+- Distribution overlap: larger Δφ pushes into regions where synthetic variability or preprocessing dominates
+- Score nonlinearity: recon error saturates if AE outputs something generic for both classes
+
+**Action:** After H32 experiment, check monotonicity across full Δφ grid (0.1, 0.3, 1, 3, 10) in phase0_summary.json. Plot AUROC vs Δφ for very_tight; expect roughly monotonic increase. If not, inspect clipping/saturation in preprocessing and AE output.
+
+---
+
+## Ablation studies (after red flags A and B are addressed)
+
+### Ablation 1: H=32 train, evaluate H=32 vs collapsed-to-8
+**Goal:** Prove “frequency resolution is the lever.”
+
+**Design:**
+- Train AE at H=32.
+- Compute H=32 scalogram at eval time.
+- Downproject to 8 bins (e.g. average groups of 4 bins).
+- Score both ways (H=32 input vs collapsed-to-8) without retraining (or retrain a tiny head).
+
+**Interpretation:** If separability disappears when you collapse H=32→8, that’s strong evidence the information is in the higher-res frequency structure.
+
+---
+
+### Ablation 2: Time resolution instead of frequency
+**Goal:** Test whether the benefit is “frequency resolution” specifically or “representation resolution” more generally.
+
+**Design:** Keep H fixed (e.g. H=8 or H=32), change time resolution instead. If time axis is coarse (large downsample_factor), the time-warp may be sub-bin.
+
+**Action:** One run with smaller `downsample_factor` (e.g. 4 instead of 8), same H. Compare AUROC.
+
+**Interpretation:** If time resolution helps similarly, the story becomes “representation resolution” more generally, not just frequency.
 
 ---
 

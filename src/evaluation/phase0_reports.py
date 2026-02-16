@@ -105,15 +105,23 @@ def save_phase0_reports(cfg: dict, recon_stats: dict) -> None:
         cohens_d_map[float(x_val)] = _cohens_d(iso_errs, errs)
         tpr_at_1pct_fpr_map[float(x_val)] = _tpr_at_fpr(y, s, target_fpr=0.01)
 
-    summary = {
-        key: {
+    def _bin_entry(val):
+        out = {
             "eps": float(val.get("eps", 0)),
             "delta_phi": float(val.get("delta_phi", 0)),
             "mean_err": float(np.mean(val["errs"])),
             "std_err": float(np.std(val["errs"])),
         }
-        for key, val in recon_stats.items()
-    }
+        if "mse_elem" in val:
+            out["mean_mse_elem"] = float(np.mean(val["mse_elem"]))
+            out["std_mse_elem"] = float(np.std(val["mse_elem"]))
+        if "sse" in val:
+            out["mean_sse"] = float(np.mean(val["sse"]))
+        if "n_elem" in val:
+            out["n_elem"] = int(val["n_elem"])
+        return out
+
+    summary = {key: _bin_entry(val) for key, val in recon_stats.items()}
     summary["auroc_vs_bin"] = auc_map
     summary["cohens_d_vs_bin"] = cohens_d_map
     summary["tpr_at_1pct_fpr"] = tpr_at_1pct_fpr_map
