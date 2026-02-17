@@ -185,6 +185,24 @@ Output: `observability_debug_large_delta_phi.json` — dt_max, dt_end, rel_L2, e
 
 ---
 
+## PN Waveform Sanity Figure (optional)
+
+A standalone figure using LALSimulation TaylorT4 validates that LOSA deformation behaves similarly for post-Newtonian waveforms. **Requires LALSuite** in a separate env:
+
+```bash
+# Create env (Python 3.11 recommended for LALSuite wheels)
+micromamba create -n pn-demo -c conda-forge python=3.11 lalsuite
+# Or: conda create -n pn-demo -c conda-forge python=3.11 lalsuite
+
+micromamba run -n pn-demo python experiments/pn_minimal_demo.py
+```
+
+**Outputs:** `figures/pn_chirp_deformation.png`, `figures/pn_chirp_deformation.pdf`
+
+Prints Δt_end (ms) and max |Δf_c| (Hz) for the caption. Does not depend on the repo `.venv`; keep `.venv` for main pipeline.
+
+---
+
 ## Sanity Checks
 
 - **Δφ=0:** AUROC(S_fc) ≈ 0.5 (isolated vs isolated).

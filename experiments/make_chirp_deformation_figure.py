@@ -24,6 +24,8 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pywt
+from scipy.signal import butter, decimate, sosfiltfilt
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -31,61 +33,96 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from data.synthetic.isolated_generator import generate_isolated_chirp
 from data.synthetic.losa import C_LIGHT, accel_from_delta_phi, apply_losa_constant_accel
-from utils.io import load_yaml
 
-from experiments.observability_phase_metric import (
-    DEFAULT_CONFIG,
-    complex_cwt_pipeline,
-    joint_gate,
-    compute_freq_centroid,
-    compute_losa_dt,
-)
+# CWT/gate/centroid inlined to avoid observability_phase_metric → utils → torch
+COLUMN_ENERGY_THRESH = 0.01
+COMPLEX_WAVELET = "cmor1.5-1.0"
+
+
+def _compute_losa_dt(a_los: float, n_samples: int, fs: float, t0: float = 0.0) -> np.ndarray:
+    t = np.arange(n_samples, dtype=np.float64) / fs
+    return 0.5 * (a_los / C_LIGHT) * (t - t0) ** 2
+
+
+def _complex_cwt_pipeline(strain, sample_rate, downsample_factor, fmin, fmax, n_scales):
+    if downsample_factor > 1:
+        x = decimate(strain.astype(np.float64), downsample_factor, zero_phase=True)
+        fs = sample_rate / downsample_factor
+    else:
+        x = strain.astype(np.float64)
+        fs = float(sample_rate)
+    sos = butter(4, fmin, btype="high", fs=fs, output="sos")
+    filtered = sosfiltfilt(sos, x)
+    whitened = (filtered - np.mean(filtered)) / (np.std(filtered) + 1e-10)
+    freqs_grid = np.logspace(np.log10(fmin), np.log10(fmax), n_scales)
+    fc = pywt.central_frequency(pywt.ContinuousWavelet(COMPLEX_WAVELET))
+    scales = fc * fs / freqs_grid
+    coeffs, freqs_pywt = pywt.cwt(whitened, scales, COMPLEX_WAVELET, sampling_period=1 / fs)
+    freqs_pywt = np.asarray(freqs_pywt, dtype=np.float64)
+    return coeffs.astype(np.complex128), freqs_grid, freqs_pywt
+
+
+def _joint_gate(P_iso, P_losa):
+    colsum_iso = np.sum(P_iso, axis=0)
+    colsum_losa = np.sum(P_losa, axis=0)
+    thr = COLUMN_ENERGY_THRESH * max(colsum_iso.max(), colsum_losa.max())
+    return ((colsum_iso > thr) & (colsum_losa > thr)).astype(np.float64)
+
+
+def _compute_freq_centroid(P, freqs, gate, eps=1e-30):
+    n_time = P.shape[1]
+    f_c = np.full(n_time, np.nan, dtype=np.float64)
+    for t in range(n_time):
+        if gate[t] < 0.5:
+            continue
+        Pcol = P[:, t] + eps
+        denom = np.sum(Pcol)
+        if denom < eps:
+            continue
+        f_c[t] = np.sum(freqs * Pcol) / denom
+    return f_c
 
 
 DELTA_PHI = 3.0
 DOWNSAMPLE_FACTOR = 4
+# Phase0 tight chirp config (ground_phase0_tight_chirp.yaml)
+T = 32768
+FS = 1024.0
+F_STAR = 40.0
+F_START = 12.0
+F_END = 65.0
+T_PEAK = 0.55
+SIGMA = 0.10
+AMPLITUDE = 1e-20
+SEED = 42
+FMIN = 10.0
+FMAX = 64.0
+N_SCALES = 8
 
 
 def main():
-    cfg = load_yaml(DEFAULT_CONFIG)
-    data_cfg = cfg.get("data", cfg.get("synthetic", {}))
-    T = int(data_cfg.get("T", 4096))
-    fs = float(data_cfg.get("sample_rate", 1024))
-    seed = int(cfg.get("experiment", {}).get("seed", 42))
-    duration = T / fs
-
-    p0 = cfg.get("phase0_losa", {})
-    f_star = float(p0.get("f_star_hz", 40.0))
-    syn = cfg.get("synthetic", {})
-    f_start = float(syn.get("chirp_f_start", 12.0))
-    f_end = float(syn.get("chirp_f_end", 65.0))
-    t_peak = float(syn.get("chirp_t_peak", 0.55))
-    sigma = float(syn.get("chirp_sigma", 0.10))
-    amplitude = float(syn.get("signal_amplitude", 1e-20))
-
-    noise_sigma = 0.0  # noise-free
-    # Sanity: confirm Phase0 parameterization
-    print(f"noise_sigma = {noise_sigma} (noise-free)")
-    print(f"LOSA model: constant accel (Phase0), f_star = {f_star} Hz")
+    duration = T / FS
+    print("noise_sigma = 0.0 (noise-free)")
+    print(f"LOSA model: constant accel (Phase0), f_star = {F_STAR} Hz")
 
     # 1. Generate paired signals
     h_iso = generate_isolated_chirp(
         T=T,
-        sample_rate=fs,
-        f_start=f_start,
-        f_end=f_end,
-        t_peak=t_peak,
-        sigma=sigma,
-        amplitude=amplitude,
-        seed=seed,
+        sample_rate=FS,
+        f_start=F_START,
+        f_end=F_END,
+        t_peak=T_PEAK,
+        sigma=SIGMA,
+        amplitude=AMPLITUDE,
+        seed=SEED,
     ).astype(np.float64)
 
-    a_los = accel_from_delta_phi(DELTA_PHI, duration, f_star_hz=f_star)
-    h_losa = apply_losa_constant_accel(h_iso.copy(), sample_rate=fs, a_los=a_los)
+    a_los = accel_from_delta_phi(DELTA_PHI, duration, f_star_hz=F_STAR)
+    h_losa = apply_losa_constant_accel(h_iso.copy(), sample_rate=FS, a_los=a_los)
     h_losa = h_losa.astype(np.float64)
 
     # 2. dt_end and max |Δt|
-    dt_arr = compute_losa_dt(a_los, T, fs)
+    dt_arr = _compute_losa_dt(a_los, T, FS)
     dt_end = float(np.abs(dt_arr[-1]))
     dt_max = float(np.max(np.abs(dt_arr)))
     dt_end_ms = dt_end * 1000
@@ -93,23 +130,18 @@ def main():
     print(f"max |Δt(t)| = {dt_max:.6e} s")
 
     # 3. Frequency centroid via CWT (same as Phase0 observability)
-    cwt_cfg = cfg.get("preprocessing", {}).get("cwt", {})
-    fmin = float(cwt_cfg.get("fmin", 20.0))
-    fmax = float(cwt_cfg.get("fmax", 512.0))
-    n_scales = int(cwt_cfg.get("target_height", 8))
-
-    C_iso, _, freqs_pywt = complex_cwt_pipeline(
-        h_iso, int(fs), DOWNSAMPLE_FACTOR, fmin, fmax, n_scales
+    C_iso, _, freqs_pywt = _complex_cwt_pipeline(
+        h_iso, int(FS), DOWNSAMPLE_FACTOR, FMIN, FMAX, N_SCALES
     )
-    C_losa, _, _ = complex_cwt_pipeline(
-        h_losa, int(fs), DOWNSAMPLE_FACTOR, fmin, fmax, n_scales
+    C_losa, _, _ = _complex_cwt_pipeline(
+        h_losa, int(FS), DOWNSAMPLE_FACTOR, FMIN, FMAX, N_SCALES
     )
     P_iso = np.abs(C_iso) ** 2
     P_losa = np.abs(C_losa) ** 2
-    gate = joint_gate(P_iso, P_losa)
+    gate = _joint_gate(P_iso, P_losa)
 
-    f_c_iso = compute_freq_centroid(P_iso, freqs_pywt, gate)
-    f_c_losa = compute_freq_centroid(P_losa, freqs_pywt, gate)
+    f_c_iso = _compute_freq_centroid(P_iso, freqs_pywt, gate)
+    f_c_losa = _compute_freq_centroid(P_losa, freqs_pywt, gate)
     delta_f_c = f_c_losa - f_c_iso
 
     valid = (gate > 0.5) & np.isfinite(f_c_iso) & np.isfinite(f_c_losa)
@@ -118,10 +150,10 @@ def main():
 
     # Time axis
     n_time = h_iso.shape[0]
-    t_sec = np.arange(n_time, dtype=np.float64) / fs
+    t_sec = np.arange(n_time, dtype=np.float64) / FS
 
     n_time_down = P_iso.shape[1]
-    fs_down = fs / DOWNSAMPLE_FACTOR
+    fs_down = FS / DOWNSAMPLE_FACTOR
     t_down = np.arange(n_time_down, dtype=np.float64) / fs_down
 
     # Normalize strain for clean overlay
@@ -163,8 +195,6 @@ def main():
         rf"$\Delta\phi_{{\mathrm{{env}}}} = {DELTA_PHI:.0f}$ rad"
         + "\n"
         + rf"$\Delta t_{{\mathrm{{end}}}} \approx {dt_end_ms:.2f}$ ms"
-        + "\n"
-        + r"SNR $= \infty$"
     )
     ax.annotate(
         ann_text,
