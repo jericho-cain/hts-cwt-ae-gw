@@ -13,6 +13,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -29,7 +30,15 @@ from experiments.observability_phase_metric import (
     compute_freq_centroid,
 )
 
-DELTA_PHI_PLOT = [0.0, 0.3, 1.0, 3.0]
+DELTA_PHI_PLOT = [3.0, 1.0, 0.3, 0.0]
+# Temporal smoothing (bins). 0 = no smoothing. Per-delta_phi overrides in SMOOTH_SIGMA_MAP.
+SMOOTH_SIGMA = 12
+SMOOTH_SIGMA_MAP = {3.0: 40}  # extra smoothing for large Δφ (overrides default)
+# Display-only: drop last finite points to kill vertical end-drop (like chirp_deformation)
+DROP_TAIL = 12
+# Time-based tail trim (seconds before last finite). Per-delta_phi override in TAIL_TRIM_S_MAP.
+TAIL_TRIM_S = 0.15
+TAIL_TRIM_S_MAP = {3.0: 0.4}  # extra trim for large Δφ (stronger end artifact)
 
 
 def main():
@@ -72,7 +81,20 @@ def main():
     P_iso = np.abs(C_iso) ** 2
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 4))
-    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(DELTA_PHI_PLOT)))
+    # Light blue (small Δφ) → dark blue (large Δφ)
+    colors = plt.cm.Blues(np.linspace(0.95, 0.25, len(DELTA_PHI_PLOT)))
+    style_map = {
+        3.0: dict(alpha=0.35, linewidth=1.2, zorder=1),
+        1.0: dict(alpha=0.95, linewidth=2.0, zorder=2),
+        0.3: dict(alpha=0.95, linewidth=2.0, zorder=3),
+        0.0: dict(alpha=0.90, linewidth=1.4, zorder=5),  # smallest Δφ on top
+    }
+    linestyle_map = {
+        3.0: "-",
+        1.0: "--",
+        0.3: "-",
+        0.0: "-",
+    }
 
     for i, delta_phi in enumerate(DELTA_PHI_PLOT):
         if delta_phi == 0:
@@ -92,11 +114,44 @@ def main():
         f_c_losa = compute_freq_centroid(P_losa, freqs_pywt, gate)
         delta_f_c = f_c_losa - f_c_iso
 
-        ax.plot(t_sec, delta_f_c, label=f"Δφ = {delta_phi}", color=colors[i], linewidth=1.5)
+        valid_mask = np.isfinite(delta_f_c)
+        smooth_sigma = SMOOTH_SIGMA_MAP.get(float(delta_phi), SMOOTH_SIGMA)
+        if smooth_sigma > 0 and np.any(valid_mask):
+            valid_idx = np.where(valid_mask)[0]
+            i0, i1 = int(valid_idx[0]), int(valid_idx[-1])
+            # Interpolate only inside: no extrapolation into tail (prevents boundary resurrection)
+            x_in = np.arange(i0, i1 + 1)
+            vals_in = np.interp(x_in, valid_idx, delta_f_c[valid_idx])
+            smoothed = gaussian_filter1d(vals_in.astype(float), sigma=smooth_sigma, mode="nearest")
+            delta_f_c = delta_f_c.copy()
+            delta_f_c[i0 : i1 + 1] = smoothed
+            delta_f_c[~valid_mask] = np.nan  # re-mask after smoothing (prevents NaN bleed)
+
+        # Display-only: drop terminal finite points to kill vertical end-drop (like chirp_deformation)
+        tail_trim_s = TAIL_TRIM_S_MAP.get(float(delta_phi), TAIL_TRIM_S)
+        if tail_trim_s is not None and tail_trim_s > 0:
+            finite_idx = np.where(np.isfinite(delta_f_c))[0]
+            if finite_idx.size > 0:
+                t_last = np.nanmax(t_sec[np.isfinite(delta_f_c)])
+                delta_f_c[t_sec > (t_last - tail_trim_s)] = np.nan
+        elif DROP_TAIL > 0:
+            finite_idx = np.where(np.isfinite(delta_f_c))[0]
+            if finite_idx.size > DROP_TAIL:
+                delta_f_c[finite_idx[-DROP_TAIL:]] = np.nan
+
+        kw = style_map.get(float(delta_phi), {})
+        ax.plot(
+            t_sec,
+            delta_f_c,
+            label=f"Δφ = {delta_phi}",
+            color=colors[i],
+            linestyle=linestyle_map.get(float(delta_phi), "-"),
+            **kw,
+        )
 
     ax.set_xlabel("Time (s)")
-    ax.set_ylabel("Δf_c(t) (Hz)")
-    ax.set_title("Frequency centroid shift Δf_c(t) = f_c,LOSA(t) − f_c,iso(t)")
+    ax.set_ylabel(r"$\Delta f_c(t)$ (Hz)")
+    ax.set_title(r"Frequency centroid shift $\Delta f_c(t) = f_{c,\mathrm{LOSA}}(t) - f_{c,\mathrm{iso}}(t)$")
     ax.legend(loc="upper left")
     ax.grid(True, alpha=0.3)
     ax.axhline(0, color="k", linewidth=0.5, linestyle="--")

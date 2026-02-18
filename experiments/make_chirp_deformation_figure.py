@@ -179,8 +179,8 @@ def main():
     delta_f_c = f_c_losa - f_c_iso
 
     # --- visualization-only cleanup for Δf_c(t) ---
-    SMOOTH_W = 31  # ~0.12 s at 256 Hz. Tune 21–61 if needed.
-    PLOT_STRIDE = 4
+    SMOOTH_W = 101  # stronger smoothing than PN (Gaussian centroid has more scale jitter)
+    PLOT_STRIDE = 10  # more decimation for cleaner dashed line
     # mask first so smoothing doesn't create boundary steps
     delta_f_c_plot = delta_f_c.copy()
     delta_f_c_plot[~gate_for_plot] = np.nan
@@ -268,9 +268,8 @@ def main():
     abs_df = np.abs(delta_f_c_plot)
     finite = np.isfinite(abs_df)
     if np.any(finite):
-        df_ref = np.nanpercentile(abs_df[finite], 99.0)
-        df_ref = max(df_ref, 1e-6)
-        ax2.set_ylim(-1.2 * df_ref, 1.2 * df_ref)
+        df_max = float(np.nanmax(abs_df[finite]))
+        ax2.set_ylim(0, max(df_max * 1.1, 0.05))
     ax2.set_xlabel("Time (s)")
     ax2.set_ylabel(r"$\Delta f_c(t)$ (Hz)")
     ax2.grid(True, alpha=0.3)
