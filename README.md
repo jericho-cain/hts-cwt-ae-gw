@@ -1,70 +1,86 @@
 # HTS-CWT-AE-GW
 
-Synthetic-only study for **Hierarchical Triple Signatures (HTS)** and LOSA perturbations in gravitational-wave anomaly detection. This repository provides reusable CWT (Continuous Wavelet Transform) autoencoder infrastructure—architecture-agnostic and ready for future HTS/LOSA modeling.
+Synthetic framework for studying line-of-sight acceleration (LOSA) phase modulation in gravitational-wave-like chirp signals using time-frequency methods.
 
-**No real detector data included.** All experiments use synthetic data.
+This repository accompanies the manuscript in `docs/main.pdf`, with the primary result that detectability of LOSA deformation is governed by a one-parameter scaling:
 
-## Overview
+\[
+\Lambda = \Delta\phi_{\mathrm{env}} \times \mathrm{SNR},
+\]
 
-- **CWT preprocessing**: Time–frequency scalograms with configurable wavelet, frequency range, and normalization
-- **Autoencoder models**: CNN-based backbone (LSTM-style) with model registry for easy backbone swapping
-- **Training scaffolding**: Training loop, callbacks, and evaluation metrics
-- **Synthetic data**: Chirp-like signals + Gaussian noise for smoke tests and baselines
+using a template-free centroid-based statistic derived from the continuous wavelet transform (CWT).
 
-Future work will add LOSA modeling and eccentric Kepler solvers. LISA-specific pipelines and real LIGO strain are out of scope for this repo.
+No real detector strain data are distributed in this repository; all reported experiments are synthetic.
 
-## Quickstart
+## Scope
 
-1. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+The current publication-facing pipeline is the centroid observability analysis:
 
-2. **Run smoke test** (synthetic data → CWT → model → 1 epoch training):
-   ```bash
-   python -m experiments.run_experiment --config experiments/configs/ground_baseline.yaml
-   ```
+- Construct CWT power maps from isolated and LOSA-modulated chirps
+- Compute centroid trajectory \( f_c(t) \)
+- Score each sample with \( S_{fc} = \mathrm{median}_t |f_c(t) - \mu_{\mathrm{iso}}(t)| \)
+- Evaluate AUROC across \((\Delta\phi_{\mathrm{env}}, \mathrm{SNR})\) and test collapse versus \(\Lambda\)
 
-   Expected output:
-   ```
-   HTS-CWT-AE-GW Smoke Test (synthetic data only)
-   Generating 16 synthetic samples (T=4096, fs=1024)
-   CWT preprocessing done: shape=(16, 8, 4096)
-   Batch 1: loss=...
-   Epoch 1 complete. Average loss: ...
-   Smoke test complete.
-   ```
+Autoencoder components are retained in the codebase for internal follow-on work, but they are not required for reproducing the main manuscript figures or conclusions.
 
-3. **Verify imports**:
-   ```bash
-   python -c "import sys; sys.path.insert(0,'src'); import models; import preprocessing; import training; print('OK')"
-   ```
+## Reproducing Main Results
 
-## Project Structure
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the observability SNR sweep (produces the core JSON for downstream plots):
+
+```bash
+python experiments/observability_dfc_auroc_baseline.py --snr_sweep --n_train 2000 --n_per_bin 500
+```
+
+Generate scaling-law and heatmap figures:
+
+```bash
+python experiments/observability_dfc_scaling_law.py
+python experiments/observability_dfc_lambda_fit.py
+python experiments/observability_dfc_snr_heatmap.py
+```
+
+Generate the chirp deformation figure:
+
+```bash
+python experiments/make_chirp_deformation_figure.py
+```
+
+For a shorter validation run, see `docs/replication_observability.md`.
+
+## Repository Layout
 
 ```
 hts-cwt-ae-gw/
 ├── README.md
-├── requirements.txt
-├── src/
-│   ├── data/synthetic/     # Isolated chirp + noise generators
-│   ├── models/             # Registry, ae_base, backbones, cwt_autoencoder
-│   ├── preprocessing/      # CWT, whitening, normalization
-│   ├── training/           # Trainer scaffolding
-│   ├── evaluation/         # Metrics, anomaly detection
-│   ├── experiments/        # run_experiment, configs
-│   └── utils/              # seed, io
+├── docs/
+│   ├── main.pdf
+│   ├── replication_observability.md
+│   └── results_overview.md
 ├── experiments/
-│   ├── configs/
-│   │   └── ground_baseline.yaml
-│   └── run_experiment.py
+│   ├── observability_*.py
+│   ├── make_chirp_deformation_figure.py
+│   ├── run_experiment.py
+│   └── configs/
+├── src/
+│   ├── data/synthetic/
+│   ├── preprocessing/
+│   ├── evaluation/
+│   ├── training/
+│   ├── models/
+│   └── utils/
 └── tests/
 ```
 
-## Configuration
+## Notes on Autoencoder Modules
 
-See `experiments/configs/ground_baseline.yaml` for model, preprocessing, training, and synthetic data parameters. The model registry uses `model.name` and `model.backbone` to instantiate models.
+Autoencoder training and phase-0 anomaly workflows remain available (`experiments/run_experiment.py`, `src/models/`, and related configs). These paths are preserved intentionally for private comparative studies (e.g., latent-space and reconstruction-based diagnostics), including future autoencoder experiments.
 
-## License
+## Citation and License
 
-MIT — see [LICENSE](LICENSE).
+See `CITATION.cff` for software citation metadata and `LICENSE` for licensing terms (MIT).
