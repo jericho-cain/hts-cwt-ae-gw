@@ -4,12 +4,12 @@ data:
   sample_rate: 1024
   snr: 5.0
 experiment:
-  save_dir: experiments/outputs/phase_diagram/medium
+  save_dir: experiments/outputs_corrected/phase_diagram_H32/medium
   seed: 42
 model:
   backbone: lstm
   dropout: 0.0
-  input_height: 8
+  input_height: 32
   input_width: 4096
   latent_dim: 32
   lstm_hidden: 64
@@ -38,7 +38,7 @@ preprocessing:
     fmin: 10.0
     norm_mode: dataset
     sample_rate: 1024
-    target_height: 8
+    target_height: 32
     target_width: 4096
     wavelet: morl
 synthetic:

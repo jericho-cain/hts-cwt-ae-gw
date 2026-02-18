@@ -238,10 +238,20 @@ def compute_latents(model: nn.Module, dataloader: DataLoader, device: torch.devi
 
 
 @torch.no_grad()
-def compute_recon_errors(model: nn.Module, dataloader: DataLoader, device: torch.device) -> np.ndarray:
-    """Compute normalized reconstruction error per sample."""
+def compute_recon_errors(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+    return_metrics: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute reconstruction error per sample.
+
+    Returns r = |x - x_hat|^2 / |x|^2 (relative energy, dimensionless).
+    If return_metrics=True, also returns (r, mse_elem, sse, n_elem) for JSON storage.
+    """
     model.eval()
-    all_err = []
+    all_r, all_mse, all_sse = [], [], []
 
     for (x,) in dataloader:
         x = x.to(device)
@@ -255,12 +265,24 @@ def compute_recon_errors(model: nn.Module, dataloader: DataLoader, device: torch
             x_hat = out
 
         diff = (x_hat - x).reshape(x.shape[0], -1)
-        num = torch.sum(diff * diff, dim=1)
-        denom = torch.sum((x.reshape(x.shape[0], -1)) ** 2, dim=1) + 1e-12
-        err = (num / denom).cpu().numpy()
-        all_err.append(err)
+        n_elem = diff.shape[1]
+        sse = torch.sum(diff * diff, dim=1).cpu().numpy()
+        denom = torch.sum((x.reshape(x.shape[0], -1)) ** 2, dim=1).cpu().numpy() + 1e-12
+        r = sse / denom
+        mse_elem = sse / n_elem
+        all_r.append(r)
+        all_mse.append(mse_elem)
+        all_sse.append(sse)
 
-    return np.concatenate(all_err, axis=0)
+    r_arr = np.concatenate(all_r, axis=0)
+    if not return_metrics:
+        return r_arr
+    return (
+        r_arr,
+        np.concatenate(all_mse, axis=0),
+        np.concatenate(all_sse, axis=0),
+        n_elem,
+    )
 
 
 def fit_mahalanobis(latents: np.ndarray, reg: float = 1e-5) -> tuple[np.ndarray, np.ndarray]:
@@ -436,6 +458,12 @@ def main():
         default="experiments/configs/ground_baseline.yaml",
         help="Path to config YAML",
     )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default=None,
+        help="Override experiment.save_dir from config",
+    )
     args = parser.parse_args()
 
     config_path = Path(args.config)
@@ -448,6 +476,9 @@ def main():
     seed = 42
     set_seed(seed)
     cfg = load_yaml(config_path)
+    if args.save_dir is not None:
+        cfg.setdefault("experiment", {})["save_dir"] = args.save_dir
+        logger.info(f"Overrode save_dir -> {args.save_dir}")
     if "experiment" in cfg and "seed" in cfg["experiment"]:
         seed = int(cfg["experiment"]["seed"])
         set_seed(seed)
@@ -512,6 +543,16 @@ def main():
             "test_recon_std": float(np.std(baseline_errs["test"])),
         }
         save_json(baseline, save_dir / "baseline_fit.json")
+        # Save model checkpoint with norms so eval scripts use the same preprocessing
+        if cfg.get("experiment", {}).get("save_model", True):
+            ckpt = {
+                "model_state_dict": model.state_dict(),
+                "config": cfg,
+                "cwt_norm_mean": cwt_norm_mean,
+                "cwt_norm_std": cwt_norm_std,
+            }
+            torch.save(ckpt, save_dir / "model.pt")
+            logger.info(f"Saved model and norms to {save_dir / 'model.pt'}")
         cwt_train_for_latent = cwt_train
     else:
         logger.info("=" * 60)
@@ -549,8 +590,15 @@ def main():
             x = x.to(device)
             ds = TensorDataset(x)
             dl = DataLoader(ds, batch_size=batch_size, shuffle=False)
-            errs = compute_recon_errors(model, dl, device)
-            entry_out = {"eps": entry.get("eps", 0), "delta_phi": entry.get("delta_phi", 0), "errs": errs}
+            r_arr, mse_elem, sse_arr, n_elem = compute_recon_errors(model, dl, device, return_metrics=True)
+            entry_out = {
+                "eps": entry.get("eps", 0),
+                "delta_phi": entry.get("delta_phi", 0),
+                "errs": r_arr,
+                "mse_elem": mse_elem,
+                "sse": sse_arr,
+                "n_elem": n_elem,
+            }
             if mahal_mu is not None:
                 lats = compute_latents(model, dl, device)
                 entry_out["latent_scores"] = mahalanobis_scores(lats, mahal_mu, mahal_sinv)

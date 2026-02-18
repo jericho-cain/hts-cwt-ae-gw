@@ -38,13 +38,20 @@ SPREAD_LEVELS = [
 ]
 
 BASE_CONFIG = ROOT / "experiments/configs/ground_phase0_tight_chirp.yaml"
-OUTPUT_DIR = ROOT / "experiments/outputs/phase_diagram"
+DEFAULT_OUTPUT_BASE = "experiments/outputs"
 
 
-def run_one(spread_label: str, jitter_pct: float | None, tight_chirp: bool) -> dict | None:
+def run_one(
+    spread_label: str,
+    jitter_pct: float | None,
+    tight_chirp: bool,
+    output_base: str,
+    phase_dir: str,
+    base_config: Path,
+) -> dict | None:
     """Run experiment and return phase0_summary.json contents."""
-    cfg = load_yaml(BASE_CONFIG)
-    save_dir = f"experiments/outputs/phase_diagram/{spread_label}"
+    cfg = load_yaml(base_config)
+    save_dir = f"{output_base}/{phase_dir}/{spread_label}"
     cfg["experiment"]["save_dir"] = save_dir
     cfg["synthetic"]["tight_chirp"] = tight_chirp
     if tight_chirp and jitter_pct is not None:
@@ -80,7 +87,40 @@ def main():
     parser.add_argument("--quick", action="store_true", help="Use quick config (2 epochs, 200 train)")
     parser.add_argument("--skip-run", action="store_true", help="Skip runs; plot from existing outputs")
     parser.add_argument("--levels", type=str, default=None, help="Comma-separated subset, e.g. very_tight,broad")
+    parser.add_argument(
+        "--output-base",
+        type=str,
+        default=None,
+        help=f"Output base dir (default: {DEFAULT_OUTPUT_BASE}). Use experiments/outputs_corrected for corrected CWT.",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Base config path (default: ground_phase0_tight_chirp). Use ground_phase0_tight_chirp_H32 for H=32.",
+    )
+    parser.add_argument(
+        "--output-suffix",
+        type=str,
+        default="",
+        help="Suffix for phase_diagram dir, e.g. _H32 -> phase_diagram_H32",
+    )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        choices=["recon", "latent"],
+        default="recon",
+        help="AUROC metric: recon or latent (Mahalanobis). Use latent when recon collapses.",
+    )
     args = parser.parse_args()
+
+    output_base = args.output_base or DEFAULT_OUTPUT_BASE
+    phase_dir = f"phase_diagram{args.output_suffix}"
+    output_dir = Path(ROOT) / output_base / phase_dir
+    base_config = Path(args.config) if args.config else BASE_CONFIG
+    if not base_config.is_absolute():
+        base_config = ROOT / base_config
+    logger.info(f"Output: {output_dir}, config: {base_config}")
 
     levels = SPREAD_LEVELS
     if args.levels:
@@ -90,17 +130,15 @@ def main():
             logger.error(f"No matching levels for {args.levels}")
             return 1
 
-    if args.quick:
-        # Override for quick test: smaller n, fewer epochs
-        global BASE_CONFIG
-        BASE_CONFIG = ROOT / "experiments/configs/ground_phase0_tight_chirp_quick.yaml"
+    if args.quick and not args.config:
+        base_config = ROOT / "experiments/configs/ground_phase0_tight_chirp_quick.yaml"
         logger.warning("Using quick config - results not publication-quality")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     results = []
 
     for label, jitter, tight in levels:
-        save_dir = OUTPUT_DIR / label
+        save_dir = output_dir / label
         summary_path = save_dir / "phase0_summary.json"
         if args.skip_run and summary_path.exists():
             with open(summary_path) as f:
@@ -108,7 +146,7 @@ def main():
             results.append((label, jitter, tight, data))
             continue
         if not args.skip_run:
-            data = run_one(label, jitter, tight)
+            data = run_one(label, jitter, tight, output_base, phase_dir, base_config)
             if data:
                 results.append((label, jitter, tight, data))
 
@@ -117,13 +155,21 @@ def main():
         return 1
 
     # Extract AUROC @ Δφ=1, Δφ=3 for each spread
+    metric = args.metric
+    auc_key = "auroc_latent_vs_bin" if metric == "latent" else "auroc_vs_bin"
+    fallback_key = "auroc_vs_bin" if metric == "latent" else None
 
     labels = [r[0] for r in results]
     x_pos = np.arange(len(labels))
     auroc_1 = []
     auroc_3 = []
     for _, _, _, d in results:
-        auc = d.get("auroc_vs_bin", {})
+        auc = d.get(auc_key)
+        if auc is None and fallback_key:
+            auc = d.get(fallback_key, {})
+            if auc and metric == "latent":
+                logger.warning("auroc_latent_vs_bin missing, falling back to recon")
+        auc = auc or {}
         auroc_1.append(auc.get(1.0, auc.get("1.0", auc.get(1, np.nan))))
         auroc_3.append(auc.get(3.0, auc.get("3.0", auc.get(3, np.nan))))
 
@@ -135,27 +181,44 @@ def main():
     ax.set_xticklabels(labels, rotation=15)
     ax.set_ylabel("AUROC")
     ax.set_xlabel("Intrinsic spread")
-    ax.set_title("LOSA Detectability vs Intrinsic Chirp Variability")
+    title = "LOSA Detectability vs Intrinsic Chirp Variability"
+    if metric == "latent":
+        title += " (latent Mahalanobis)"
+    if args.output_suffix:
+        title += f" {args.output_suffix.strip('_')}"
+    ax.set_title(title)
     ax.axhline(0.5, color="gray", linestyle="--", alpha=0.5)
     ax.legend()
     ax.set_ylim(0.35, 1.0)
     plt.tight_layout()
-    out_path = OUTPUT_DIR / "phase_diagram_auroc_vs_spread.png"
+    out_name = "phase_diagram_auroc_vs_spread.png"
+    if metric == "latent":
+        out_name = "phase_diagram_auroc_vs_spread_latent.png"
+    if args.output_suffix:
+        out_name = out_name.replace(".png", f"{args.output_suffix}.png")
+    out_path = output_dir / out_name
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close()
-    logger.info(f"Saved {out_path}")
+    logger.info(f"Saved {out_path} (metric={metric})")
 
     # Save numeric results
     table = {
+        "metric": metric,
+        "config": str(base_config.name),
         "spread": labels,
         "jitter_pct": [r[1] for r in results],
         "tight_chirp": [r[2] for r in results],
         "auroc_dphi_1": auroc_1,
         "auroc_dphi_3": auroc_3,
     }
-    with open(OUTPUT_DIR / "phase_diagram_results.json", "w") as f:
+    results_name = "phase_diagram_results.json"
+    if metric == "latent":
+        results_name = "phase_diagram_results_latent.json"
+    if args.output_suffix:
+        results_name = results_name.replace(".json", f"{args.output_suffix}.json")
+    with open(output_dir / results_name, "w") as f:
         json.dump(table, f, indent=2)
-    logger.info(f"Saved {OUTPUT_DIR / 'phase_diagram_results.json'}")
+    logger.info(f"Saved {output_dir / results_name}")
     return 0
 
 
