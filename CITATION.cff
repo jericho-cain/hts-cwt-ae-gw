@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use this software, please cite it as below."
+message: "If you use this software or manuscript, please cite the relevant entry below."
 authors:
   - family-names: "HTS-CWT-AE-GW"
     given-names: ""
@@ -8,6 +8,16 @@ version: 0.1.0
 date-released: 2025-02-15
 url: "https://github.com/gravitational-wave-detection/hts-cwt-ae-gw"
 license: MIT
+preferred-citation:
+  type: article
+  authors:
+    - family-names: "Cain"
+      given-names: "Jericho"
+  title: "Scaling Laws for Template-Free Detection of Environmental Phase Modulation in Gravitational-Wave Signals"
+  journal: "arXiv"
+  year: 2026
+  article-number: "2602.17725"
+  url: "https://arxiv.org/abs/2602.17725"
 keywords:
   - gravitational-waves
   - machine-learning

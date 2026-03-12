@@ -1,5 +1,7 @@
 # HTS-CWT-AE-GW
 
+[![arXiv](https://img.shields.io/badge/arXiv-2602.17725-b31b1b.svg)](https://arxiv.org/abs/2602.17725)
+
 Synthetic framework for studying line-of-sight acceleration (LOSA) phase modulation in gravitational-wave-like chirp signals using time-frequency methods.
 
 This repository accompanies the manuscript in `docs/main.pdf`, with the primary result that detectability of LOSA deformation is governed by a one-parameter scaling:
@@ -83,4 +85,16 @@ Autoencoder training and phase-0 anomaly workflows remain available (`experiment
 
 ## Citation and License
 
-See `CITATION.cff` for software citation metadata and `LICENSE` for licensing terms (MIT).
+If you use the manuscript associated with this repository, cite:
+
+```bibtex
+@article{cain2026scaling,
+  title = {Scaling Laws for Template-Free Detection of Environmental Phase Modulation in Gravitational-Wave Signals},
+  author = {Cain, Jericho},
+  journal = {arXiv preprint arXiv:2602.17725},
+  year = {2026},
+  url = {https://arxiv.org/abs/2602.17725}
+}
+```
+
+See `CITATION.cff` for software and manuscript citation metadata and `LICENSE` for licensing terms (MIT).
